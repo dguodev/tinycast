@@ -30,7 +30,7 @@ selectable Markdown renderer with AI Chat.
   through `DialogController` first and then calls `Permissions.ensureAccessibility()`, the pattern
   `SnippetCoordinator.setSnippetsEnabled` established. Everything else — a shortcut press, a
   delivery — uses `isAccessibilityTrusted()` and degrades to a HUD.
-- **Tinycast is never an event target.** `QuickActionRunner.selection(in:using:)` refuses our own
+- **Tinycast is never an event target.** `QuickActionRunner.selection` refuses our own
   bundle identifier, and `TextInjector.targetAcceptsInjection` refuses it again before every event post,
   along with anything raised while Secure Event Input is up. Notes is the narrow in-process exception:
   its own editor supplies and replaces a selected passage without Accessibility, clipboard or events.
@@ -39,8 +39,15 @@ selectable Markdown renderer with AI Chat.
   replace text the first had already changed. `QuickActionCoordinator` holds a single task and
   refuses a second while it lives; a generation token stops a task that finishes after being
   replaced — by a retranslate, say — from clearing the newer handle.
-- **`Model/` stays Foundation-only.** `quick-action-test` compiles that folder standalone, which is
-  what keeps `FoundationModels`, `Translation` and `NaturalLanguage` in `Service/` and `UI/`.
+- **`Model/` stays Foundation-only.** `quick-action-test` and `rich-text-test` compile that folder's
+  files standalone, which is what keeps `FoundationModels`, `Translation` and `NaturalLanguage` in
+  `Service/` and `UI/`.
+- **An edit keeps the reader's formatting; nothing else pays for it.** `QuickAction.preservesFormatting`
+  is true for Fix Grammar, Rewrite and every custom action. Their selection travels as Markdown only
+  when the copied `public.html` holds formatting beyond lines and paragraphs, which
+  `RichText.markdown(fromHTML:)` decides by returning nil. Every other case — Summarize, Translate,
+  Notes, plain HTML, an app that copies no HTML, and a reply the model left unformatted — takes the plain
+  path that existed before.
 - **Quick Actions route themselves.** `quickActionModel` is a second routing decision, defaulting to
   Apple Intelligence and falling back to chat's model. A shortcut pressed all day should not bill an
   API every time, and that is not a choice chat's default can make on its behalf.
@@ -91,13 +98,13 @@ without one.
 The custom case carries the record rather than an id, so a run uses the prompt as it was when it
 started.
 
-| Action | Engine | Default result | Diff |
-| --- | --- | --- | --- |
-| Fix Grammar | provider | replaces directly | yes |
-| Rewrite | provider | panel | yes |
-| Translate | Apple Translation | panel | no |
-| Summarize | provider | panel, always | no |
-| a custom action | provider | panel | no |
+| Action | Engine | Default result | Diff | Keeps formatting |
+| --- | --- | --- | --- | --- |
+| Fix Grammar | provider | replaces directly | yes | yes |
+| Rewrite | provider | panel | yes | yes |
+| Translate | Apple Translation | panel | no | no |
+| Summarize | provider | panel, always | no | no |
+| a custom action | provider | panel | no | yes |
 
 A custom action previews by default, switchable to Replace per row: Tinycast cannot know whether an
 arbitrary prompt transforms the text or answers a question about it, and only the second destroys what
@@ -239,6 +246,24 @@ Copying is the fallback and never the first try: it synthesises a keystroke into
 When both tiers come back empty, only an Accessibility result of `.empty` justifies "nothing is
 selected"; otherwise the app told us nothing either way and says so.
 
+**A formatting-preserving action borrows the ⌘C even when Accessibility answered.** Accessibility
+returns plain text only, so in Slack it reads a bold, listed, linked message as bare words, and a
+rewrite pasted back over it erases the formatting. `copySelection` returns the first item's
+`public.html` beside its text; `RichText.markdown(fromHTML:)` turns it into Markdown, and the
+selection becomes `QuickActionText(format: .markdown)`. When the HTML converts to nothing, the
+Accessibility text is used as before. The byte cap applies to whichever text is sent.
+
+The converter is a small tolerant tokenizer, not `XMLParser`, because pasteboard HTML is tag soup.
+It reads tags (`b`, `i`, `s`, `code`, `pre`, `a`, lists, `blockquote`, headings) and the inline CSS
+Chromium copies carry. A tag sets a mark and its CSS can cancel it, which is how Google Docs'
+`<b style="font-weight:normal">` wrapper stays plain. Each block element is a line and a block holding
+only a `<br>` is a blank line, which is how Slack, Gmail and Quill draw text. Posted Slack messages
+write bullets as `•` text between `<br>`s, and the converter keeps those as lines rather than
+inventing a list. In this Markdown a single newline is a line break, as it is in the composer, so
+the model keeps lines without hard-break syntax. `QuickActionPrompt.markdownRule` tells the model so
+and asks it to keep every mark on the same words. The rule is appended after any instructions,
+including an override, because delivery depends on the marks surviving.
+
 Quicklinks and snippets read `{selection}` through the same two tiers, with one rule of their own:
 the ⌘C is sent only when the expanded template reads the selection. A snippet's keyword expansion
 never sends one, since a typed keyword leaves nothing selected.
@@ -251,7 +276,7 @@ result instead of replacing another passage.
 
 For external apps, `TextInjector` — shared with Snippets and Quicklinks, and owned by `AppCore` — does
 the replacement.
-`replaceSelection(with:in:)` takes the interactive path: no keyword to match, no generation to
+`replaceSelection(with:html:in:)` takes the interactive path: no keyword to match, no generation to
 cancel, because a shortcut is an explicit gesture rather than an expansion the app decided to
 attempt. Its serial delivery queue is what stops two features fighting over the pasteboard lease.
 
@@ -261,10 +286,20 @@ no keyword, so rule 2 never applies. The event tiers behind it type or paste ove
 every app treats as replacing it — but that is the target app's behaviour rather than something
 Tinycast asserts, so it is the part worth checking by hand.
 
+**A formatted reply is pasted, never set or typed.** `RichText.render(markdown:)` walks Foundation's
+`AttributedString` parse and returns HTML plus a plain rendering. Lines become `<div>`s and blank lines
+become `<div><br></div>`, because a pasted `<p>` brings each target's paragraph margins.
+`replaceSelection(with:html:in:)` skips the Accessibility tier and short-text typing when HTML is
+present, since neither can carry formatting, and goes straight to the paste lease, which lends
+`.html` and `.string` on one marked item. A reply with nothing formatted renders with `html` nil, so
+it is delivered as plain text through every tier as before, with the converter's escapes resolved.
+The panel and its diff show the Markdown source; Replace renders it the same way.
+
 **A replacement that never lands says so, and keeps the reply.** Every tier can decline, and a shortcut
 that quietly did nothing is indistinguishable from a shortcut that is not bound. `DeliveryCompletion`
 now settles either way, so a delivery that returned early reports failure exactly once; Quick Actions
-put the generated text on the clipboard and raise a HUD rather than dropping it. Snippets pass no
+put the generated text on the clipboard, as its plain rendering when it was Markdown, and raise a HUD
+rather than dropping it. Snippets pass no
 failure handler, so automatic expansion stays silent as before.
 
 ### Manual sweep
@@ -275,6 +310,12 @@ failure handler, so automatic expansion stays silent as before.
   replacement, Undo, and that changing the note before pressing Replace copies instead.
 - In a Chromium target, run one on a **short** selection whose result stays under 100 characters on
   one line: the whole result lands, not its first four characters.
+- In Slack's composer, type a message with **bold**, _italic_, ~strike~, `code`, a link and a bulleted
+  and a numbered list, select all of it and run Rewrite, then Fix Grammar, then a custom action:
+  every mark lands on the same words, the lists stay lists, and the clipboard holds what it held
+  before. Repeat on a short one-line bold selection, which must paste rather than type.
+- Run Rewrite over plain unformatted text in Slack and in TextEdit: nothing changes from before,
+  and TextEdit is still replaced through Accessibility.
 - Replace mode, with a slow route selected: the message pill says `Fixing Grammar…` with a blue
   spinner while the model works, and the result message takes its place.
 - Run one from the launcher (⌘Space → "Fix Grammar") with text selected behind it: the palette
@@ -299,6 +340,9 @@ failure handler, so automatic expansion stays silent as before.
 - Translate into a language that has not been downloaded: the panel names the language, and its
   button closes the panel and opens Language & Region.
 - Revoke Accessibility while enabled: a HUD explains instead of failing silently.
-- Harnesses: `quick-action-test` (action metadata, prompt boundaries, preview choices, routes and
-  their repair) and
-  `text-diff-test` (exact chunks, coalescing, Unicode, ties, token boundaries and fast paths).
+- Harnesses: `quick-action-test` (action metadata, prompt boundaries, the Markdown rule, preview
+  choices, routes and their repair),
+  `text-diff-test` (exact chunks, coalescing, Unicode, ties, token boundaries and fast paths) and
+  `rich-text-test` (pasteboard HTML to Markdown, including a real Slack message in
+  `Tests/rich-text-fixtures/`, and Markdown rendered back to HTML and plain text). The lease's HTML
+  flavour and the copied HTML are covered in `snippets-test`.
