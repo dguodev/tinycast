@@ -14,7 +14,7 @@ final class QuickActionPanelState {
     }
 
     let action: QuickAction
-    let original: String
+    let original: QuickActionText
     private(set) var output = ""
     private(set) var phase: Phase = .running
     var targetLanguage: Locale.Language
@@ -24,7 +24,7 @@ final class QuickActionPanelState {
     var diff: [TextDiffEngine.Chunk] {
         guard action.showsDiff, phase == .finished else { return [] }
         if let cachedDiff { return cachedDiff }
-        let chunks = TextDiffEngine.diff(original: original, modified: output)
+        let chunks = TextDiffEngine.diff(original: original.text, modified: output)
         cachedDiff = chunks
         return chunks
     }
@@ -33,7 +33,7 @@ final class QuickActionPanelState {
 
     var canReplace: Bool { phase == .finished && !output.isEmpty }
 
-    init(action: QuickAction, original: String, targetLanguage: Locale.Language) {
+    init(action: QuickAction, original: QuickActionText, targetLanguage: Locale.Language) {
         self.action = action
         self.original = original
         self.targetLanguage = targetLanguage

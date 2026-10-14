@@ -2,12 +2,25 @@ import Foundation
 
 /// Chat's `AIPreamble` is not sent here: it describes a launcher nobody is asking the model about.
 enum QuickActionPrompt {
-    static func instructions(for action: QuickAction, override: String? = nil) -> String {
-        switch action {
-        case .builtIn(let builtIn): return instructions(for: builtIn, override: override)
-        case .custom(let custom): return boundary + "\n\n" + custom.instructions
-        }
+    static func instructions(
+        for action: QuickAction, format: QuickActionText.Format = .plain, override: String? = nil
+    ) -> String {
+        let instructions =
+            switch action {
+            case .builtIn(let builtIn): instructions(for: builtIn, override: override)
+            case .custom(let custom): boundary + "\n\n" + custom.instructions
+            }
+        guard format == .markdown else { return instructions }
+        return instructions.isEmpty ? markdownRule : instructions + "\n\n" + markdownRule
     }
+
+    /// Appended after any instructions, an override's included: delivery rebuilds the formatting.
+    static let markdownRule = """
+        The text is Markdown, and a single line break in it is a line break. Keep every formatting \
+        mark — bold, italics, strikethrough, inline code, code blocks, links, lists, quotes and line \
+        breaks — on the same words and in the same structure, change only what the task requires, \
+        and do not add formatting that was not there.
+        """
 
     static func instructions(for action: BuiltInQuickAction, override: String? = nil) -> String {
         if !action.usesTranslationFramework, let override { return override }

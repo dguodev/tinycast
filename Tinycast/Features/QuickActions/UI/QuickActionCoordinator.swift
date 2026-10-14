@@ -215,13 +215,15 @@ final class QuickActionCoordinator {
     }
 
     private func begin(_ action: QuickAction, target: Target) async {
-        let selection: String
+        let selection: QuickActionText
         do {
             switch target {
             case .external(let app):
-                selection = try await QuickActionRunner.selection(in: app, using: injector)
+                selection = try await QuickActionRunner.selection(
+                    in: app, using: injector, preservingFormatting: action.preservesFormatting)
             case .note(let note):
-                selection = try QuickActionRunner.accepted(note.text)
+                selection = try QuickActionRunner.accepted(
+                    QuickActionText(text: note.text, format: .plain))
             }
         } catch let failure as QuickActionFailure {
             reportRefusal(failure)
@@ -266,7 +268,7 @@ final class QuickActionCoordinator {
             guard !Task.isCancelled else { return }
             state.finish(text)
             if previewing { return }
-            deliver(text, to: target, action: state.action)
+            deliver(text, format: state.original.format, to: target, action: state.action)
         } catch is CancellationError {
             return
         } catch let error as TextTranslator.Failure where error.needsDownload {
@@ -300,7 +302,7 @@ final class QuickActionCoordinator {
         _ state: QuickActionPanelState, streaming: Bool
     ) async throws -> String {
         if state.action.usesTranslationFramework {
-            return try await TextTranslator.translate(state.original, to: state.targetLanguage)
+            return try await TextTranslator.translate(state.original.text, to: state.targetLanguage)
         }
         let provider = try core.quickActionProvider(for: state.action)
         return try await QuickActionRunner.run(
@@ -313,12 +315,17 @@ final class QuickActionCoordinator {
     }
 
     /// A replacement that never lands would otherwise lose the reply, so the clipboard keeps it.
-    private func deliver(_ text: String, to target: Target, action: QuickAction) {
+    private func deliver(
+        _ text: String, format: QuickActionText.Format, to target: Target, action: QuickAction
+    ) {
+        // The model answered in Markdown, so pasting its source would print the marks.
+        let rendered = format == .markdown ? RichText.render(markdown: text) : nil
+        let plain = rendered?.plain ?? text
         let onDelivered: @MainActor @Sendable () -> Void = { [weak self] in
             self?.core.showMessage("\(action.title) applied")
         }
         let onFailed: @MainActor @Sendable () -> Void = { [weak self] in
-            Paster.copyPlainText(text)
+            Paster.copyPlainText(plain)
             self?.core.showMessage(
                 "\(action.title) couldn't replace the selection — copied instead",
                 tone: .danger)
@@ -326,7 +333,8 @@ final class QuickActionCoordinator {
         switch target {
         case .external(let app):
             injector.replaceSelection(
-                with: text, in: app, onDelivered: onDelivered, onFailed: onFailed)
+                with: plain, html: rendered?.html, in: app,
+                onDelivered: onDelivered, onFailed: onFailed)
         case .note(let note):
             guard core.notesCoordinator.editorInput == note.document,
                 note.editor.window?.isVisible == true,
@@ -356,7 +364,7 @@ final class QuickActionCoordinator {
                 self?.rerun(state, target: target)
             },
             onReplace: { [weak self] text in
-                self?.deliver(text, to: target, action: state.action)
+                self?.deliver(text, format: state.original.format, to: target, action: state.action)
             })
     }
 

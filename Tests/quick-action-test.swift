@@ -24,6 +24,7 @@ struct QuickActionTests {
         refusalsNameTheirOwnCause()
         customActionsCarryTheirOwnIdentity()
         customActionsKeepTheBoundary()
+        formattingTravelsOnlyWithEdits()
         customActionsSurviveARelaunch()
         customActionsNeverWriteOverWhatTheyCouldNotRead()
 
@@ -351,6 +352,40 @@ struct QuickActionTests {
         expect(
             !QuickActionSettings().previewsResult(.custom(replacing)),
             "the choice travels on the record, so deleting it takes the choice too")
+    }
+
+    /// Only an action that hands back the reader's own text, edited, has formatting to keep.
+    static func formattingTravelsOnlyWithEdits() {
+        let record = CustomQuickAction(name: "Make Formal", instructions: "Make it formal.")
+        expect(
+            QuickAction.allBuiltIn.filter(\.preservesFormatting) == [.fixGrammar, .rewrite],
+            "Fix Grammar and Rewrite keep formatting; a summary or translation is new text")
+        expect(
+            QuickAction.custom(record).preservesFormatting,
+            "a custom action keeps formatting, since it may well transform the text")
+
+        let rule = QuickActionPrompt.markdownRule
+        expect(rule.contains("Markdown"), "the rule tells the model the text is Markdown")
+        let plain = QuickActionPrompt.instructions(for: .rewrite)
+        expect(!plain.contains(rule), "plain text gets no Markdown rule")
+        expect(
+            QuickActionPrompt.instructions(for: .rewrite, format: .markdown) == plain + "\n\n" + rule,
+            "the rule follows the built-in prompt rather than replacing it")
+        expect(
+            QuickActionPrompt.instructions(for: .rewrite, format: .markdown, override: "Mine")
+                == "Mine\n\n" + rule,
+            "an override still gets the rule, because delivery depends on the marks surviving")
+        expect(
+            QuickActionPrompt.instructions(for: .rewrite, format: .markdown, override: "") == rule,
+            "an empty override sends the rule alone, with no stray blank lines")
+        let custom = QuickActionPrompt.instructions(for: .custom(record), format: .markdown)
+        expect(
+            custom.hasPrefix(QuickActionPrompt.boundary)
+                && custom.contains(record.instructions) && custom.hasSuffix(rule),
+            "a custom action keeps its boundary and its words, with the rule after them")
+        expect(
+            !QuickActionPrompt.instructions(for: .custom(record)).contains(rule),
+            "a custom action reading plain text gets no rule")
     }
 
     static func customActionsKeepTheBoundary() {

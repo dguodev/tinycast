@@ -56,4 +56,12 @@ enum QuickAction: Hashable, Identifiable, Sendable {
     var rendersMarkdown: Bool { builtInAction.map { $0 == .summarize } ?? true }
 
     var usesTranslationFramework: Bool { builtInAction?.usesTranslationFramework ?? false }
+
+    /// A summary or a translation is new text, so there is no formatting of the reader's to keep.
+    var preservesFormatting: Bool {
+        switch self {
+        case .builtIn(let action): return action == .fixGrammar || action == .rewrite
+        case .custom: return true
+        }
+    }
 }
