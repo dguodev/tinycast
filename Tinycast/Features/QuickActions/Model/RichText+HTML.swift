@@ -423,7 +423,7 @@ extension RichText {
 
         // MARK: Style
 
-        /// Tag first, then CSS, so Google Docs' `<b style="font-weight:normal">` wrapper is not bold.
+        /// Tag first, then CSS, because Google Docs wraps everything in a normal-weight `<b>`.
         private static func style(of element: Element, inheriting inherited: Style) -> Style {
             guard !inherited.code else { return inherited }
             var style = inherited

@@ -19,7 +19,7 @@ final class QuickActionRunner {
 
         let reported = AccessibilityText.read(in: targetApp)
         if case .text(let text) = reported {
-            // Accessibility reads plain text only, so formatting costs the ⌘C it otherwise avoids.
+            // Accessibility has no formatting to give, so this borrows the ⌘C anyway.
             if preservingFormatting,
                 let markdown = await injector.copySelection(from: targetApp).flatMap(markdown(of:))
             {
