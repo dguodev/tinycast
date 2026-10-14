@@ -717,6 +717,8 @@ run mcp-test               Tinycast/Features/Settings/AppSettingsKey.swift \
                            Tinycast/Features/MCP/Settings/MCPSettingsStore.swift
 run -O text-diff-test      Tinycast/Features/QuickActions/Model/TextDiffEngine.swift
 run index text-diff-performance Tinycast/Features/QuickActions/Model/TextDiffEngine.swift
+run rich-text-test         Tinycast/Features/QuickActions/Model/RichText.swift \
+                           Tinycast/Features/QuickActions/Model/RichText+HTML.swift
 run quick-action-test      Tinycast/Features/Settings/AppSettingsKey.swift \
                            Tinycast/Features/AI/Model/AIConnection.swift \
                            Tinycast/Features/AI/Model/AppleIntelligence.swift \
