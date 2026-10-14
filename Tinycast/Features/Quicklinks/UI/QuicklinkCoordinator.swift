@@ -186,7 +186,7 @@ final class QuicklinkCoordinator {
         // The palette holds key, so the ⌘C would land in its own search field.
         if windowController.isVisible { paletteCoordinator.hidePalette(restoreFocus: false) }
         var attempt = attempt
-        attempt.context.selection = await injector.copySelection(from: app) ?? ""
+        attempt.context.selection = await injector.copySelection(from: app)?.text ?? ""
         attempt.copySource = nil
         guard let quicklink = openableQuicklink(id: attempt.quicklink.id) else { return nil }
         attempt.quicklink = quicklink

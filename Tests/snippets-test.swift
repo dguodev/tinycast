@@ -664,12 +664,15 @@ struct SnippetsTests {
             try? await Task.sleep(for: .milliseconds(60))
             let item = NSPasteboardItem()
             item.setString("the selection", forType: .string)
+            item.setString("<b>the</b> selection", forType: .html)
             backing.clearContents()
             _ = backing.writeObjects([item])
         }
         let copied = await injector.copySelection(from: nil, pasteboard: pasteboard)
         _ = await writer.result
-        check("a copy that lands is read back: \(copied ?? "nil")", copied == "the selection")
+        check(
+            "a copy that lands is read back with its HTML: \(String(describing: copied))",
+            copied == CopiedSelection(text: "the selection", html: "<b>the</b> selection"))
         check(
             "the reader's clipboard is restored afterwards",
             backing.string(forType: .string) == "Original")
@@ -704,7 +707,7 @@ struct SnippetsTests {
         let earlier = await first.value
         check(
             "overlapping borrows never return the clipboard as a selection: "
-                + "\(earlier ?? "nil"), \(second ?? "nil")",
+                + "\(earlier?.text ?? "nil"), \(second?.text ?? "nil")",
             earlier == nil && second == nil)
         check(
             "overlapping borrows leave the clipboard as it was",
@@ -947,6 +950,24 @@ struct SnippetsTests {
             restoredItems?.allSatisfy {
                 !$0.types.contains(ClipboardManager.internalType)
             } == true)
+
+        let formattedLease = TemporaryPasteboardLease.begin(
+            text: "Plain", html: "<b>Bold</b>", pasteboard: pasteboard)
+        check(
+            "a formatted lease lends text and HTML on one item still marked as Tinycast's",
+            formattedLease?.isOwned == true
+                && pasteboard.pasteboardItems?.count == 1
+                && pasteboard.string(forType: .string) == "Plain"
+                && pasteboard.string(forType: .html) == "<b>Bold</b>"
+                && pasteboard.pasteboardItems?[0].types.contains(ClipboardManager.internalType) == true)
+        let formattedRestore = formattedLease?.restoreIfOwned()
+        check(
+            "restoring a formatted lease returns the original and leaves none of the lent HTML",
+            formattedRestore != nil
+                && pasteboard.pasteboardItems?.count == 2
+                && pasteboard.string(forType: .string) == "Original"
+                && pasteboard.pasteboardItems?[0].data(forType: customType) == Data([0, 1, 2, 3])
+                && pasteboard.pasteboardItems?.allSatisfy { $0.data(forType: .html) == nil } == true)
 
         pasteboard.writeFailuresRemaining = 1
         var recoveredMutationCount: Int?

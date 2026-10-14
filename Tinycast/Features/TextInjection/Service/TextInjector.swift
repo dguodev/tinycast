@@ -4,11 +4,14 @@ import Carbon.HIToolbox
 /// Its own shape, not a caller's result type, so the injector stays owned by no one feature.
 struct InjectedText: Equatable, Sendable {
     let text: String
+    /// Only a paste can carry formatting, so text with HTML skips Accessibility and typing.
+    let html: String?
     /// Leaves the caret this many characters back from the end; nil leaves it after the text.
     let cursorOffsetFromEnd: Int?
 
-    init(_ text: String, cursorOffsetFromEnd: Int? = nil) {
+    init(_ text: String, html: String? = nil, cursorOffsetFromEnd: Int? = nil) {
         self.text = text
+        self.html = html
         self.cursorOffsetFromEnd = cursorOffsetFromEnd
     }
 
@@ -17,6 +20,12 @@ struct InjectedText: Equatable, Sendable {
         let offset = min(max(cursorOffsetFromEnd ?? 0, 0), text.count)
         return text[..<text.index(text.endIndex, offsetBy: -offset)].utf16.count
     }
+}
+
+/// What a borrowed ⌘C found: the text, and the first item's `public.html` when the app wrote one.
+struct CopiedSelection: Equatable, Sendable {
+    let text: String
+    let html: String?
 }
 
 enum AccessibilityReplacement: Equatable {
@@ -211,18 +220,19 @@ final class TextInjector {
     /// The caller must know there *is* a selection: a zero-length one inserts at the caret instead.
     func replaceSelection(
         with text: String,
+        html: String? = nil,
         in targetApp: NSRunningApplication?,
         onDelivered: @escaping @MainActor () -> Void = {},
         onFailed: @escaping @MainActor () -> Void = {}
     ) {
         deliver(
-            InjectedText(text), target: targetApp.map(InjectionTarget.external),
+            InjectedText(text, html: html), target: targetApp.map(InjectionTarget.external),
             expectedKeyword: nil, keywordLength: 0,
             automaticGeneration: nil, onDelivered: onDelivered, onFailed: onFailed)
     }
 
     /// A `changeCount` that never moves means nothing was selected, not that the old clipboard won.
-    func copySelection(from targetApp: NSRunningApplication?) async -> String? {
+    func copySelection(from targetApp: NSRunningApplication?) async -> CopiedSelection? {
         await deliveryQueue.drain()
         guard finishPendingPasteboardOwnership(),
             await activateAndWaitForTarget(targetApp, automaticGeneration: nil),
@@ -236,7 +246,7 @@ final class TextInjector {
     /// Split for the harness, which drives a stub pasteboard rather than another app.
     func copySelection(
         from targetApp: NSRunningApplication?, pasteboard: any PasteboardAccess
-    ) async -> String? {
+    ) async -> CopiedSelection? {
         // A second borrow would snapshot the first's copy and read its restore as a selection.
         guard !isBorrowingCopy, let original = PasteboardSnapshot(pasteboard: pasteboard) else {
             return nil
@@ -254,9 +264,9 @@ final class TextInjector {
             guard await wait(for: Self.copyPollInterval) else { return nil }
             guard pasteboard.changeCount != original.changeCount else { continue }
             guard let copied = PasteboardSnapshot(pasteboard: pasteboard),
-                let data = copied.firstStringData
+                let text = copied.firstString(ofType: .string)
             else { return nil }
-            return String(bytes: data, encoding: .utf8)
+            return CopiedSelection(text: text, html: copied.firstString(ofType: .html))
         }
         return nil
     }
@@ -382,21 +392,23 @@ final class TextInjector {
                 promptForInteractiveAccessibility: true)
         else { return }
 
-        let accessibilityReplacement = await replaceUsingAccessibility(
-            injected,
-            targetApp: targetApp,
-            expectedKeyword: expectedKeyword,
-            keywordLength: keywordLength,
-            automaticGeneration: automaticGeneration)
-        if accessibilityReplacement == .delivered {
-            completion.confirm()
-            return
+        if injected.html == nil {
+            let accessibilityReplacement = await replaceUsingAccessibility(
+                injected,
+                targetApp: targetApp,
+                expectedKeyword: expectedKeyword,
+                keywordLength: keywordLength,
+                automaticGeneration: automaticGeneration)
+            if accessibilityReplacement == .delivered {
+                completion.confirm()
+                return
+            }
+            guard accessibilityReplacement.fallsBackToEvents else { return }
         }
-        guard accessibilityReplacement.fallsBackToEvents else { return }
 
         guard
             await deliverUsingEvents(
-                injected.text,
+                injected,
                 keywordLength: keywordLength,
                 targetApp: targetApp,
                 automaticGeneration: automaticGeneration)
@@ -424,16 +436,17 @@ final class TextInjector {
     }
 
     private func deliverUsingEvents(
-        _ text: String,
+        _ injected: InjectedText,
         keywordLength: Int,
         targetApp: NSRunningApplication?,
         automaticGeneration: AutomaticGeneration?
     ) async -> Bool {
+        let text = injected.text
         let isShortSingleLine =
             text.count <= 100
             && !text.contains("\n")
             && !text.contains("\r")
-        if isShortSingleLine {
+        if isShortSingleLine, injected.html == nil {
             return await deliverUsingUnicodeEvents(
                 text,
                 keywordLength: keywordLength,
@@ -441,7 +454,7 @@ final class TextInjector {
                 automaticGeneration: automaticGeneration)
         }
 
-        guard let lease = beginTemporaryPasteboardLease(text) else {
+        guard let lease = beginTemporaryPasteboardLease(text, html: injected.html) else {
             return await deliverUsingUnicodeEvents(
                 text,
                 keywordLength: keywordLength,
@@ -533,10 +546,13 @@ final class TextInjector {
         return await wait(for: .milliseconds(40))
     }
 
-    private func beginTemporaryPasteboardLease(_ text: String) -> TemporaryPasteboardLease? {
+    private func beginTemporaryPasteboardLease(
+        _ text: String, html: String?
+    ) -> TemporaryPasteboardLease? {
         clipboardManager.prepareForTinycastPasteboardMutation()
         return TemporaryPasteboardLease.begin(
             text: text,
+            html: html,
             pasteboard: NSPasteboard.general
         ) { [clipboardManager] changeCount in
             clipboardManager.synchronizeAfterTinycastPasteboardMutation(
@@ -1106,11 +1122,12 @@ final class TemporaryPasteboardLease {
 
     static func begin(
         text: String,
+        html: String? = nil,
         pasteboard: any PasteboardAccess,
         onMutation: (Int) -> Void = { _ in }
     ) -> TemporaryPasteboardLease? {
         guard let snapshot = PasteboardSnapshot(pasteboard: pasteboard),
-            let temporaryItem = PasteboardSnapshot.temporaryItem(carrying: text),
+            let temporaryItem = PasteboardSnapshot.temporaryItem(carrying: text, html: html),
             let originalItems = snapshot.pasteboardItems(),
             pasteboard.changeCount == snapshot.changeCount
         else { return nil }
@@ -1154,8 +1171,11 @@ struct PasteboardSnapshot {
     let items: [Item]
     let changeCount: Int
 
-    var firstStringData: Data? {
-        items.first?.values.first { $0.type == .string }?.data
+    func firstString(ofType type: NSPasteboard.PasteboardType) -> String? {
+        guard let data = items.first?.values.first(where: { $0.type == type })?.data else {
+            return nil
+        }
+        return String(bytes: data, encoding: .utf8)
     }
 
     init?(pasteboard: any PasteboardAccess) {
@@ -1174,10 +1194,11 @@ struct PasteboardSnapshot {
         self.changeCount = changeCount
     }
 
-    /// A kept `public.html` is the flavour a Chromium editor prefers, so we lend the text alone.
-    static func temporaryItem(carrying text: String) -> NSPasteboardItem? {
+    /// Never the original's `public.html`: a Chromium editor would paste it instead of our text.
+    static func temporaryItem(carrying text: String, html: String?) -> NSPasteboardItem? {
         let item = NSPasteboardItem()
         guard item.setString(text, forType: .string),
+            html.map({ item.setString($0, forType: .html) }) ?? true,
             item.setData(Data(), forType: ClipboardManager.internalType)
         else { return nil }
         return item

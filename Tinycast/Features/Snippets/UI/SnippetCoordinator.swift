@@ -291,7 +291,7 @@ final class SnippetCoordinator {
         }
         Task {
             var context = context
-            context.selection = await injector.copySelection(from: app) ?? ""
+            context.selection = await injector.copySelection(from: app)?.text ?? ""
             let records = store.snippets
             guard let record = records.first(where: { $0.id == id }) else { return }
             finishExpansion(

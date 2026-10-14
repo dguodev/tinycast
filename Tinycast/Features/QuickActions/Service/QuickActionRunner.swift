@@ -19,7 +19,7 @@ final class QuickActionRunner {
         let reported = AccessibilityText.read(in: targetApp)
         if case .text(let text) = reported { return try accepted(text) }
         if let copied = await injector.copySelection(from: targetApp) {
-            return try accepted(copied)
+            return try accepted(copied.text)
         }
         // Only when Accessibility saw a text element is "nothing is selected" the honest answer.
         throw reported == .empty

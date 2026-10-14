@@ -398,6 +398,11 @@ final class AppIndex {
     func setCommandsListed(_ commands: Set<CommandID>, _ listed: Bool) {}
 }
 
+struct CopiedSelection {
+    let text: String
+    let html: String?
+}
+
 enum InjectionTarget: Equatable {
     case frontmost, previous
     static func current() -> Self? { .frontmost }
@@ -410,9 +415,9 @@ final class TextInjector {
     var copied: String?
     var copies = 0
     var target: InjectionTarget?
-    func copySelection(from app: NSRunningApplication?) async -> String? {
+    func copySelection(from app: NSRunningApplication?) async -> CopiedSelection? {
         copies += 1
-        return copied
+        return copied.map { CopiedSelection(text: $0, html: nil) }
     }
     func captureExpansionContext(
         target: InjectionTarget?, clipboardHistory: [String]
