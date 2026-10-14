@@ -286,7 +286,7 @@ extension RichText {
     /// The character that would open a heading, quote, list, rule or table at the start of a line.
     private static func blockMarkerIndex(_ characters: [Character]) -> Int? {
         guard let first = characters.first else { return nil }
-        if "#>-+=|[".contains(first) { return 0 }
+        if "#>-+=|".contains(first) { return 0 }
         let digits = characters.prefix(while: { $0.isASCII && $0.isNumber }).count
         guard digits > 0, digits < characters.count,
             characters[digits] == "." || characters[digits] == ")"

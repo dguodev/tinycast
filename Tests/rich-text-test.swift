@@ -23,6 +23,7 @@ struct RichTextTests {
 
     static func main() {
         slackMarkupBecomesMarkdown()
+        slackMessageFixtureKeepsItsLines()
         chromiumInlineStylesCountAsFormatting()
         googleDocsWrapperIsNotBold()
         blockBoundariesAreLines()
@@ -80,6 +81,45 @@ struct RichTextTests {
         expectEqual(
             RichText.markdown(fromHTML: slackHTML), slackMarkdown,
             "Slack's bold, italics, strike, code, link, emoji, lists, quote and block all carry over")
+    }
+
+    /// Copied from posted Slack messages: bullets are `•` text between `<br>`s, not a list.
+    static func slackMessageFixtureKeepsItsLines() {
+        guard let data = FileManager.default.contents(atPath: "Tests/rich-text-fixtures/slack-message.html"),
+            let html = String(bytes: data, encoding: .utf8)
+        else {
+            expect(false, "the Slack message fixture is readable")
+            return
+        }
+        let expected = """
+            the first batch was only a start -- we saw steady traffic over the next hour, retries included.
+
+            [12:47 PM]
+            here is the impact, maybe some of it is the cause?
+
+            > **Impact:**
+            > • The service received 3,123 requests and completed **none** (no 5xx errors — just hangs).
+            > • Token grant: 1,658 failures, `access_denied` (403).
+            > • All other APIs were also blocked.
+            """
+        let markdown = RichText.markdown(fromHTML: html)
+        expectEqual(
+            markdown, expected,
+            "nested wrappers collapse, each <br> stays a line and one blank line separates messages")
+        let rendered = markdown.flatMap(RichText.render(markdown:))
+        expect(
+            rendered?.html?.contains(
+                "<blockquote><div><b>Impact:</b><br>• The service received 3,123 requests") == true,
+            "the quote renders with its bold and each bullet on its own line")
+        expectEqual(
+            rendered?.html.flatMap(RichText.markdown(fromHTML:)), expected,
+            "pasting our HTML back into Slack and copying it again changes nothing")
+
+        let bullets = RichText.render(markdown: "**Steps**\n• a\n• b")
+        expectEqual(
+            bullets?.html, "<meta charset=\"utf-8\"><div><b>Steps</b><br>• a<br>• b</div>",
+            "a single newline renders as a line break, never a joined line")
+        expectEqual(bullets?.plain, "Steps\n• a\n• b", "and as a newline in the plain flavour")
     }
 
     static func chromiumInlineStylesCountAsFormatting() {
